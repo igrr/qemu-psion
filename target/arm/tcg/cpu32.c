@@ -858,6 +858,15 @@ static void ti925t_initfn(Object *obj)
     cpu->reset_sctlr = 0x00000070;
 }
 
+static void arm710a_initfn(Object *obj)
+{
+    ARMCPU *cpu = ARM_CPU(obj);
+    set_feature(&cpu->env, ARM_FEATURE_V4T);
+    cpu->midr = 0;
+    cpu->env.cp15.c0_cpuid = 0x41047100;
+}
+
+
 static void sa1100_initfn(Object *obj)
 {
     ARMCPU *cpu = ARM_CPU(obj);
@@ -1145,6 +1154,7 @@ static const ARMCPUInfo arm_tcg_cpus[] = {
     { .name = "cortex-r5f",  .initfn = cortex_r5f_initfn },
     { .name = "cortex-r52",  .initfn = cortex_r52_initfn },
     { .name = "ti925t",      .initfn = ti925t_initfn },
+    { .name = "arm710a",    .initfn = arm710a_initfn },
     { .name = "sa1100",      .initfn = sa1100_initfn },
     { .name = "sa1110",      .initfn = sa1110_initfn },
     { .name = "pxa250",      .initfn = pxa250_initfn },
