@@ -172,6 +172,12 @@ config OMAP
     select SD
     select SERIAL
 
+config PSION
+    bool
+    depends on TCG && ARM
+    default y
+    select SERIAL
+
 config PXA2XX
     bool
     select FRAMEBUFFER

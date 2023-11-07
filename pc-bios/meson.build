@@ -48,6 +48,7 @@ blobs = [
   'pxe-pcnet.rom',
   'pxe-rtl8139.rom',
   'pxe-virtio.rom',
+  'sysrom_series5.bin',
   'efi-e1000.rom',
   'efi-eepro100.rom',
   'efi-ne2k_pci.rom',
