@@ -36,8 +36,6 @@
 #include "qemu/timer.h"
 #include "qemu/log.h"
 #include <stdint.h>
-#include "vcd.h"
-#include "psion_series5.h"
 
 /* CL-PS7110 and Windermere timers */
 
@@ -63,6 +61,7 @@ typedef struct PsionTimerState {
     /*< public >*/
     timer_clk_t clk;
     timer_mode_t mode;
+    bool enabled;
     uint16_t interval;
     uint16_t base_value;
     int64_t base_ns;
@@ -73,6 +72,6 @@ typedef struct PsionTimerState {
 
 
 void psion_timer_update_alarm(PsionTimerState* timer);
-void psion_timer_update_settings(PsionTimerState *timer, timer_clk_t clk, timer_mode_t mode);
+void psion_timer_update_settings(PsionTimerState *timer, timer_clk_t clk, timer_mode_t mode, bool enabled);
 void psion_timer_load(PsionTimerState *timer, uint32_t new_val);
 int16_t psion_timer_get_val(PsionTimerState* timer);

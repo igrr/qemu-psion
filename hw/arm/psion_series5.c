@@ -1,5 +1,3 @@
-#include "hw/arm/psion_timer.h"
-#include "hw/qdev-core.h"
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
@@ -38,6 +36,8 @@
 #include "vcd.h"
 #include "psion_series5.h"
 #include "psion_timer.h"
+#include "hw/qdev-core.h"
+
 
 // #define ENABLE_RTC_DEBUG
 #ifdef ENABLE_RTC_DEBUG
@@ -580,8 +580,8 @@ static void clps7100_periph_write(void *opaque, hwaddr offset,
             timer_clk_t tc2_clk = FIELD_EX32(value, SYSCON, TC2S) ? TIMER_CLK_512KHZ : TIMER_CLK_2KHZ;
             timer_mode_t tc1_mode = FIELD_EX32(value, SYSCON, TC1M) ? TIMER_MODE_PRESCALE : TIMER_MODE_FREE_RUNNING;
             timer_mode_t tc2_mode = FIELD_EX32(value, SYSCON, TC2M) ? TIMER_MODE_PRESCALE : TIMER_MODE_FREE_RUNNING;
-            psion_timer_update_settings(&s->timers[0], tc1_clk, tc1_mode);
-            psion_timer_update_settings(&s->timers[1], tc2_clk, tc2_mode);
+            psion_timer_update_settings(&s->timers[0], tc1_clk, tc1_mode, true);
+            psion_timer_update_settings(&s->timers[1], tc2_clk, tc2_mode, true);
 
             if (FIELD_EX32(value, SYSCON, LCDEN)) {
                 qemu_log("clps7100_periph_write: SYSCON: !!!!!!!! LCD ON !!!!!!!!! \n");
@@ -805,13 +805,13 @@ static void clps7100_realize(DeviceState *dev, Error **errp)
     s->irq = qdev_get_gpio_in(DEVICE(s->cpu), ARM_CPU_IRQ);
     s->fiq = qdev_get_gpio_in(DEVICE(s->cpu), ARM_CPU_FIQ);
     
-
-    
     for (int i = 0; i < 2; ++i) {
         object_property_set_int(OBJECT(&s->timers[i]), "index", i, &error_fatal);
         qdev_connect_gpio_out(DEVICE(&s->timers[i]), 0,
                                 qdev_get_gpio_in_named(DEVICE(s), "timer_irq", i));
         qdev_realize(DEVICE(&s->timers[i]), sysbus_get_default(), &error_fatal);
+        s->timers[0].enabled = true;
+        s->timers[1].enabled = true;
     }
 
     vcd_open(&vcd_file_info);
@@ -823,16 +823,11 @@ static void clps7100_reset(DeviceState *dev)
     ARMCPU *cpu = s->cpu;
 
     cpu_reset(CPU(cpu));
-    timer_del(&s->timers[0].timer);
-    timer_del(&s->timers[1].timer);
     timer_del(&s->rtc_timer);
 
-    s->timers[0].base_value = 0xffff;
-    s->timers[0].interval = 0xffff;
-    s->timers[1].base_value = 0xffff;
-    s->timers[1].interval = 0xffff;
     // set up the 64Hz RTC timer
     timer_mod_anticipate_ns(&s->rtc_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000 * 1000 * 1000 / 64);
+
 }
 
 static void clps7100_class_init(ObjectClass *klass, void *data)

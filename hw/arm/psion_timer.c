@@ -29,6 +29,10 @@ int16_t psion_timer_get_val(PsionTimerState* timer)
 
 void psion_timer_update_alarm(PsionTimerState* timer)
 {
+    if (!timer->enabled) {
+        timer_del(&timer->timer);
+        return;
+    }
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     int32_t ticks_to_zero = timer->base_value;
     int64_t delta_ns = muldiv64(ticks_to_zero, 1000 * 1000, (timer->clk == TIMER_CLK_512KHZ) ? 512 : 2);
@@ -37,15 +41,16 @@ void psion_timer_update_alarm(PsionTimerState* timer)
 }
 
 
-void psion_timer_update_settings(PsionTimerState *timer, timer_clk_t clk, timer_mode_t mode)
+void psion_timer_update_settings(PsionTimerState *timer, timer_clk_t clk, timer_mode_t mode, bool enabled)
 {
-    if (timer->clk == clk && timer->mode == mode) {
+    if (timer->clk == clk && timer->mode == mode && timer->enabled == enabled) {
         /* no change */
         return;
     }
-    TIMER_DEBUG("%s: timer=%d clk=%s mode=%s\n", __func__,
-            timer->index, clk == TIMER_CLK_512KHZ ? "512KHZ" : "2KHZ", mode == TIMER_MODE_PRESCALE ? "PRESCALE" : "FREE_RUNNING");
+    TIMER_DEBUG("%s: timer=%d clk=%s mode=%s enabled=%d\n", __func__,
+            timer->index, clk == TIMER_CLK_512KHZ ? "512KHZ" : "2KHZ", mode == TIMER_MODE_PRESCALE ? "PRESCALE" : "FREE_RUNNING", enabled);
 
+    timer->enabled = enabled;
     timer->clk = clk;
     timer->mode = mode;
     psion_timer_update_alarm(timer);
