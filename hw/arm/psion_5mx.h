@@ -5,43 +5,43 @@
 #include "hw/registerfields.h"
 
 
-REG32(MEMCFG1, 0x0000)
-REG32(MEMCFG2, 0x0004)
-REG32(DRAM_CFG, 0x0100)
+REG32(MEMCFG1, 0x0000)  /* Memory configuration */
+REG32(MEMCFG2, 0x0004)  /* Memory configuration */
+REG32(DRAM_CFG, 0x0100)  /* DRAM control register */
 
-REG32(PWRSR, 0x0400)
-    FIELD(PWRSR, RTCDIV, 0, 6)
+REG32(PWRSR, 0x0400)   /* Power control state */
+    FIELD(PWRSR, RTCDIV, 0, 6)  /* 6 bits, 64Hz ticks since the increment of RTC, 32 counts ahead of RTC */
     FIELD(PWRSR, MCDR, 6, 1)
-    FIELD(PWRSR, DCDET, 7, 1)
-    FIELD(PWRSR, WUDR, 8, 1)
+    FIELD(PWRSR, DCDET, 7, 1)  /* Power from the mains adapter */
+    FIELD(PWRSR, WUDR, 8, 1)   /* Wake up direct read */
     FIELD(PWRSR, WUON, 9, 1)
-    FIELD(PWRSR, NBFLG, 10, 1)
-    FIELD(PWRSR, RSTFLG, 11, 1)
+    FIELD(PWRSR, NBFLG, 10, 1)   /* New battery flag, clear at STFCLR */
+    FIELD(PWRSR, RSTFLG, 11, 1)  /* Reset flag, clear at STFCLR */
     FIELD(PWRSR, PFFLG, 12, 1)
-    FIELD(PWRSR, CLDFLG, 13, 1)
-    FIELD(PWRSR, VERID, 14, 2)
+    FIELD(PWRSR, CLDFLG, 13, 1)  /* Cold start flag, clear at STFCLR */
+    FIELD(PWRSR, VERID, 14, 2)  /* Windermere version id, two bits, 0 for first version */
 
-REG32(PWRCNT, 0x0404)
+REG32(PWRCNT, 0x0404)  /* Clock/debug control status */
     FIELD(PWRCNT, EXCKEN, 0, 1)
     FIELD(PWRCNT, WAKEDIR, 1, 1)
-    FIELD(PWRCNT, CLKFLG, 2, 1)
-    FIELD(PWRCNT, ADCCLK, 3, 1)
+    FIELD(PWRCNT, CLKFLG, 2, 1)  /* Clock speed, 1=36MHz, 0=18MHz */
+    FIELD(PWRCNT, ADCCLK, 3, 1)  /* 8 bit to set the clock divider for ADCCLK output clock */
 
-REG32(HALT, 0x0408)
-REG32(STBY, 0x040c)
+REG32(HALT, 0x0408) /* Enter idle mode */
+REG32(STBY, 0x040c)  /* Enter standby mode */
 
-REG32(BLEOI, 0x0410)
+REG32(BLEOI, 0x0410)  /* Clear battery low interrupt, write only */
 REG32(MCEOI, 0x0414)
-REG32(TEOI, 0x0418)
-REG32(STFCLR, 0x041c)
-REG32(E2EOI, 0x0420)
+REG32(TEOI, 0x0418) /* Clear tick interrupt, write only */
+REG32(STFCLR, 0x041c) /* Clear NBFLG, RSTFLG, PFFLG, CLDFLG, write only */
+REG32(E2EOI, 0x0420)  /* Clear NEINT2, write only */
 
-REG32(TC1EOI, 0x0c0c)
-REG32(TC2EOI, 0x0c2c)
-REG32(RTCEOI, 0x0d10)
-REG32(UMSEOI, 0x0714)
+REG32(TC1EOI, 0x0c0c)  /* Clear timer 1 interrupt, write only */
+REG32(TC2EOI, 0x0c2c)  /* Clear timer 2 interrupt, write only */
+REG32(RTCEOI, 0x0d10)  /* Clear RTC interrupt, write only */
+REG32(UMSEOI, 0x0714)  /* Clear UART 2 modem status interrupt, write only */
 
-REG32(INTSR, 0x0500)
+REG32(INTSR, 0x0500)    /* Interrupt status after masking, read-only */
     FIELD(INTSR, EXTFIQ, 0, 1)
     FIELD(INTSR, BLINT, 1, 1)
     FIELD(INTSR, WEINT, 2, 1)
@@ -59,9 +59,9 @@ REG32(INTSR, 0x0500)
     FIELD(INTSR, UMSINT, 14, 1)
     FIELD(INTSR, SSEOTI, 15, 1)
 
-REG32(INTRSR, 0x0504)
-REG32(INTENS, 0x0508)
-REG32(INTENC, 0x050c)
+REG32(INTRSR, 0x0504)   /* Interrupt status before masking, read-only */
+REG32(INTENS, 0x0508)  /* Interrupt enable, read-write */
+REG32(INTENC, 0x050c)  /* Interrupt disable, write-only */
 REG32(INTTEST1, 0x0514)
 REG32(INTTEST2, 0x0518)
 
@@ -83,25 +83,31 @@ REG32(BZCONT, 0x0c40)
     FIELD(BZCONT, BZ_BZTOG, 0, 1)
     FIELD(BZCONT, BZ_BZMOD, 1, 1)
 
-REG32(RTCDRL, 0x0d00)
-REG32(RTCDRU, 0x0d04)
-REG32(RTCMRL, 0x0d08)
-REG32(RTCMRU, 0x0d0c)
+REG32(RTCDRL, 0x0d00)   /* RTC data register low */
+REG32(RTCDRU, 0x0d04)   /* RTC data register high */
+REG32(RTCMRL, 0x0d08)   /* RTC match register low */
+REG32(RTCMRU, 0x0d0c)   /* RTC match register high */
 
-REG32(SSCR0, 0x0b00)
-REG32(SSCR1, 0x0b04)
-REG32(SSDR, 0x0b0c)
-REG32(SSSR, 0x0b14)
 
+/* SSI - Synchronous Serial Interface */
+REG32(SSCR0, 0x0b00)    /* Serial control register 0 */
+REG32(SSCR1, 0x0b04)    /* Serial control register 1 */
+REG32(SSDR, 0x0b0c) /* Data register */
+REG32(SSSR, 0x0b14) /* Status register */
+
+
+/* DC to DC Converter */
 REG32(PUMPCON, 0x0900)
 #define PUMP_RUN_VAL	0xbbb
 #define PUMP_STOP_VAL	0x0
 
-REG32(CODR, 0x0a00)
-REG32(CONFG, 0x0a04)
-REG32(COLFG, 0x0a08)
-REG32(COEOI, 0x0a0c)
-REG32(COTEST, 0x0a10)
+REG32(CODR, 0x0a00) /* Codec data register */
+REG32(CONFG, 0x0a04)    /* Codec config register */
+REG32(COLFG, 0x0a08)    /* Codec flag register */
+REG32(COEOI, 0x0a0c)    /* Codec end of interrupt, write only */
+REG32(COTEST, 0x0a10)   /* Codec test register */
+
+/* GPIO/KBD Registers */
 
 REG32(PADR, 0x0e00)
 REG32(PBDR, 0x0e04)
@@ -141,14 +147,17 @@ REG32(LCDT2, 0x228)
     FIELD(LCDT2, LCDT2_IPC, 22, 1)
     FIELD(LCDT2, LCDT2_IEO, 23, 1)
 
-REG8(UART0_DATA, 0x600)
-REG32(UART0_FCR, 0x604)
-REG32(UART0_LCR, 0x608)
-REG8(UART0_CON, 0x60c)
-REG8(UART0_FLG, 0x610)
-REG8(UART0_INT, 0x614)
-REG8(UART0_INTM, 0x618)
-REG8(UART0_INTR, 0x61c)
+/* See drivers/serial/psionw.h in psion_dump/linux/linux-2.6.0-psionw2.patch */
+
+REG8(UART0_DATA, 0x600)  /* Data register */
+REG32(UART0_FCR, 0x604)  /* Frame control register */
+REG32(UART0_LCR, 0x608)  /* Line control register, UBRCR */
+REG8(UART0_CON, 0x60c)   /* Port control register */
+REG8(UART0_FLG, 0x610)   /* Flag register (Read only) UARTFLG */
+    FIELD(UART0_FLG, UARTFLG_RXFE, 4, 1)
+REG8(UART0_INT, 0x614)   /* Second level interrupt register */
+REG8(UART0_INTM, 0x618)  /* Interrupt mask register */
+REG8(UART0_INTR, 0x61c)    /* Interrupt raw status register (Read only) */
 REG32(UART0_TEST1, 0x620)
 REG32(UART0_TEST2, 0x624)
 REG32(UART0_TEST3, 0x628)
@@ -158,6 +167,7 @@ REG32(UART1_FCR, 0x704)
 REG32(UART1_LCR, 0x708)
 REG8(UART1_CON, 0x70c)
 REG8(UART1_FLG, 0x710)
+    FIELD(UART1_FLG, UARTFLG_RXFE, 4, 1)
 REG8(UART1_INT, 0x714)
 REG8(UART1_INTM, 0x718)
 REG8(UART1_INTR, 0x71c)

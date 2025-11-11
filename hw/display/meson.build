@@ -26,6 +26,7 @@ system_ss.add(when: 'CONFIG_BLIZZARD', if_true: files('blizzard.c'))
 system_ss.add(when: 'CONFIG_EXYNOS4', if_true: files('exynos4210_fimd.c'))
 system_ss.add(when: 'CONFIG_FRAMEBUFFER', if_true: files('framebuffer.c'))
 system_ss.add(when: 'CONFIG_ZAURUS', if_true: files('tc6393xb.c'))
+system_ss.add(when: 'CONFIG_PSION', if_true: files('psion5_fb.c'))
 
 system_ss.add(when: 'CONFIG_OMAP', if_true: files('omap_dss.c'))
 system_ss.add(when: 'CONFIG_PXA2XX', if_true: files('pxa2xx_lcd.c'))

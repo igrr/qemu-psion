@@ -870,8 +870,7 @@ static void arm710t_initfn(Object *obj)
 {
     ARMCPU *cpu = ARM_CPU(obj);
     set_feature(&cpu->env, ARM_FEATURE_V4T);
-    cpu->midr = 0;
-    cpu->env.cp15.c0_cpuid = 0x41807000;
+    cpu->midr = 0x41807100;
 }
 
 static void sa1100_initfn(Object *obj)

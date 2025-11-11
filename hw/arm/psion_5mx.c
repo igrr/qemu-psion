@@ -1,4 +1,5 @@
 #include "qemu/osdep.h"
+#include "exec/hwaddr.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
 #include "cpu.h"
@@ -37,6 +38,8 @@
 #include "psion_5mx.h"
 #include "psion_timer.h"
 #include "hw/qdev-core.h"
+#include "qemu/log.h"
+#include "hw/display/psion5_fb.h"
 
 
 // #define ENABLE_RTC_DEBUG
@@ -129,6 +132,11 @@ typedef struct WindermereState {
     uint32_t intmr;          /* interrupt mask register */
     uint64_t rtc_count;      /* rtc tick counter, 64 Hz */
     uint32_t rtcmr;          /* real time clock match register */
+
+
+    /*lcd*/
+    uint32_t lcd_bar1;     /* LCD frame buffer base address */
+    Psion5FbState fb;
 } WindermereState;
 
 #define FIQ_INTERRUPTS (R_INTSR_EXTFIQ_MASK | R_INTSR_BLINT_MASK | R_INTSR_WEINT_MASK)
@@ -285,6 +293,10 @@ static uint64_t windermere_periph_read(void *opaque, hwaddr offset, unsigned siz
             result = 0xffffffff;
             break;
         }
+        case A_LCD_DBAR1: {
+            result = s->lcd_bar1;
+            break;
+        }
         case A_PWRSR: {
             result = windermere_get_rtc(s) & 0x3f;
             break;
@@ -298,7 +310,7 @@ static uint64_t windermere_periph_read(void *opaque, hwaddr offset, unsigned siz
             break;
         }
         case A_INTRSR: {
-            result = s->intmr;
+            result = s->intsr;
             break;
         }
         case A_TC1VAL: {
@@ -326,6 +338,15 @@ static uint64_t windermere_periph_read(void *opaque, hwaddr offset, unsigned siz
             break;
         }
         case A_KSCAN: {
+            result = 0;
+            break;
+        }
+        case A_UART1_FLG: {
+            result = 0;
+            FIELD_DP32(result, UART1_FLG, UARTFLG_RXFE, 1);
+            break;
+        }
+        case A_SSCR0: {
             result = 0;
             break;
         }
@@ -470,6 +491,15 @@ static void windermere_periph_write(void *opaque, hwaddr offset,
             s->rtc_count = (((value & 0xffff) << 16) | ((s->rtc_count / 64) & 0xffff)) * 64;
             break;
         }
+        case A_SSCR0: {
+            break;
+        }
+        case A_LCD_DBAR1: {
+            s->lcd_bar1 = value;
+            qemu_log("windermere_periph_write: LCD_DBAR1=0x%08x\n", (uint32_t) value);
+            psion5fb_set_base_addr(&s->fb, value);
+            break;
+        }
         default: {
             UNHANDLED_REG_DEBUG("windermere_periph_write: unhandled addr=%03x value=0x%08x\n", (uint32_t) offset, (uint32_t) value);
             break;
@@ -536,6 +566,22 @@ static const MemoryRegionOps etna_ops = {
     .write = etna_write,
 };
 
+
+static uint64_t memory_read_empty(void *opaque, hwaddr addr, unsigned size)
+{
+    return size == 1 ? 0xff : size == 2 ? 0xffff : 0xffffffff;
+}
+
+static void memory_write_empty(void *opaque, hwaddr addr, uint64_t data, unsigned size)
+{
+}
+
+static const MemoryRegionOps sram_bank_c0_ff_ops = {
+    .read = &memory_read_empty,
+    .write = &memory_write_empty,
+    .endianness = DEVICE_LITTLE_ENDIAN
+};
+
 static void windermere_init(Object *obj)
 {
     WindermereState *s = WINDERMERE(obj);
@@ -544,12 +590,12 @@ static void windermere_init(Object *obj)
 
     /* 0x0000_0000 */
     MemoryRegion *rom = g_new(MemoryRegion, 1);
-    memory_region_init_rom(rom, NULL, "psion.rom", 12 * MiB, &error_abort);
+    memory_region_init_rom(rom, NULL, "psion.rom", 16 * MiB, &error_abort);
     memory_region_add_subregion(address_space_mem, 0x00000000, rom);
 
     /* 0x1000_0000 */
     MemoryRegion *rom2 = g_new(MemoryRegion, 1);
-    memory_region_init_rom(rom2, NULL, "psion.rom2", 12 * MiB, &error_abort);
+    memory_region_init_rom(rom2, NULL, "psion.rom2", 16 * MiB, &error_abort);
     memory_region_add_subregion(address_space_mem, 0x10000000, rom2);
 
     /* 0x2000_0000 */
@@ -562,42 +608,38 @@ static void windermere_init(Object *obj)
                           TYPE_WINDERMERE, 0x1000);
     memory_region_add_subregion_overlap(address_space_mem, 0x80000000, &s->iomem, 0);
 
-    /* 0xc000_0000 and 0xd000_0000 */
+    /* 0xc000_0000 -> 0xffff_ffff dummy placeholder, returning ff */
+    MemoryRegion *sram_bank_c0_ff = g_new(MemoryRegion, 1);
+    size_t c0_ff_size = 0x100000000 - 0xc0000000;
+    memory_region_init_io(sram_bank_c0_ff, NULL, &sram_bank_c0_ff_ops, NULL, "psion.sram_c0_ff", c0_ff_size);
+    memory_region_add_subregion_overlap(address_space_mem, 0xc0000000, sram_bank_c0_ff, 0);
+
+    /* Based on linux-2.4.19-rmk2-5mx2.patch */
     MemoryRegion *sram_bank_c0 = g_new(MemoryRegion, 1);
-    MemoryRegion *sram_bank_c1 = g_new(MemoryRegion, 1);
     memory_region_init_ram(sram_bank_c0, NULL, "psion.sram_c0", 8 * MiB, &error_abort);
-    memory_region_init_ram(sram_bank_c1, NULL, "psion.sram_c1", 8 * MiB, &error_abort);
+    memory_region_add_subregion_overlap(address_space_mem, 0xc0000000, sram_bank_c0, 1);
 
-    memory_region_add_subregion(address_space_mem, 0xc0000000, sram_bank_c0);
-    memory_region_add_subregion(address_space_mem, 0xc1000000, sram_bank_c1);
+    // MemoryRegion *sram_bank_c1 = g_new(MemoryRegion, 1);
+    // memory_region_init_ram(sram_bank_c1, NULL, "psion.sram_c1", 8 * MiB, &error_abort);
+    // memory_region_add_subregion_overlap(address_space_mem, 0xc1000000, sram_bank_c1, 1);
 
-    for (int alias_index = 1; alias_index <= 4; ++alias_index) {
+    // MemoryRegion *sram_bank_d0 = g_new(MemoryRegion, 1);
+    // memory_region_init_alias(sram_bank_d0, NULL, "psion.sram_d0", sram_bank_c0, 0, 8 * MiB);
+    // memory_region_add_subregion_overlap(address_space_mem, 0xd0000000, sram_bank_d0, 1);
+
+    // MemoryRegion *sram_bank_d1 = g_new(MemoryRegion, 1);
+    // memory_region_init_alias(sram_bank_d1, NULL, "psion.sram_d1", sram_bank_c0, 0, 8 * MiB);
+    // memory_region_add_subregion_overlap(address_space_mem, 0xd1000000, sram_bank_d1, 1);
+
+
+    size_t alias_step = 8 * MiB;
+    for (int alias_index = 1; alias_index < 64; ++alias_index) {
         char name[32];
         MemoryRegion *sram_c0_alias = g_new(MemoryRegion, 1);
         snprintf(name, sizeof(name), "psion.sram_c0_alias_%d", alias_index);
         memory_region_init_alias(sram_c0_alias, NULL, name, sram_bank_c0, 0, 8 * MiB);
-        memory_region_add_subregion(address_space_mem, 0xc0000000 + alias_index * 8 * MiB, sram_c0_alias);
-
-        MemoryRegion *sram_c1_alias = g_new(MemoryRegion, 1);
-        snprintf(name, sizeof(name), "psion.sram_c1_alias_%d", alias_index);
-        memory_region_init_alias(sram_c1_alias, NULL, name, sram_bank_c1, 0, 8 * MiB);
-        memory_region_add_subregion(address_space_mem, 0xc1000000 + alias_index * 8 * MiB, sram_c1_alias);
+        memory_region_add_subregion_overlap(address_space_mem, 0xc0000000 + alias_index * alias_step, sram_c0_alias, 1);
     }
-    MemoryRegion *sram_bank_c4 = g_new(MemoryRegion, 1);
-    memory_region_init_rom(sram_bank_c4, NULL, "psion.sram_c4", 0xdc000000 - 0xc4000000, &error_abort);
-    memory_region_add_subregion(address_space_mem, 0xc4000000, sram_bank_c4);
-
-    /* 0xe000_0000 */
-    MemoryRegion *sram_bank_e0 = g_new(MemoryRegion, 1);
-    memory_region_init_rom(sram_bank_e0, NULL, "psion.sram_e0", 4 * MiB, &error_abort);
-    memory_region_add_subregion(address_space_mem, 0xe0000000, sram_bank_e0);
-
-
-
-    /* 0xf000_0000 */
-    MemoryRegion *sram_bank_f0 = g_new(MemoryRegion, 1);
-    memory_region_init_rom(sram_bank_f0, NULL, "psion.sram_f0", 4 * MiB, &error_abort);
-    memory_region_add_subregion(address_space_mem, 0xf0000000, sram_bank_f0);
 
     timer_init_ns(&s->rtc_timer, QEMU_CLOCK_VIRTUAL, windermere_rtc_cb, s);
 
@@ -607,6 +649,8 @@ static void windermere_init(Object *obj)
         object_initialize_child(obj, timer_name, &s->timers[i], TYPE_PSION_TIMER);
     }
     qdev_init_gpio_in_named(DEVICE(s), windermere_timer_cb, "timer_irq", 2);
+
+    object_initialize_child(obj, "fb", &s->fb, TYPE_PSION5FB);
 }
 
 
@@ -622,6 +666,8 @@ static void windermere_realize(DeviceState *dev, Error **errp)
                                 qdev_get_gpio_in_named(DEVICE(s), "timer_irq", i));
         qdev_realize(DEVICE(&s->timers[i]), sysbus_get_default(), &error_fatal);
     }
+
+    qdev_realize(DEVICE(&s->fb), sysbus_get_default(), &error_fatal);
 
     // vcd_open(&vcd_file_info);
 }
@@ -657,7 +703,7 @@ static const TypeInfo windermere_info = {
 
 
 
-static void psion_s5_init(MachineState *machine)
+static void psion_5mx_init(MachineState *machine)
 {
     ARMCPU *cpu;
 
@@ -670,7 +716,11 @@ static void psion_s5_init(MachineState *machine)
         exit(EXIT_FAILURE);
     }
 
-    cpu = ARM_CPU(cpu_create(machine->cpu_type));
+    cpu = ARM_CPU(object_new(machine->cpu_type));
+
+    object_property_set_int(OBJECT(cpu), "midr", 0x41807100,
+                            &error_fatal);
+    qdev_realize(DEVICE(cpu), NULL, &error_fatal);
 
     WindermereState *windermere = WINDERMERE(qdev_new(TYPE_WINDERMERE));
     windermere->cpu = cpu;
@@ -682,13 +732,21 @@ static void psion_s5_init(MachineState *machine)
     };
     arm_load_kernel(cpu, machine, &psion_s5_boot_info);
 
-    char *rom_binary = qemu_find_file(QEMU_FILE_TYPE_BIOS, "sysrom_5mx.bin");
+    const char* firmware = "sysrom_5mx.bin";
+
+    if (machine->firmware) {
+        firmware = machine->firmware;
+    }
+
+    char *rom_binary = qemu_find_file(QEMU_FILE_TYPE_BIOS, firmware);
     if (rom_binary == NULL) {
         error_report("Error: ROM code binary not found");
         exit(1);
     }
 
-    ssize_t size = load_image_targphys(rom_binary, 0, 12 * MiB);
+    qemu_log("Loading firmware '%s'\n", rom_binary);
+
+    ssize_t size = load_image_targphys(rom_binary, 0, 16 * MiB);
     if (size < 0) {
         error_report("Error: could not load ROM binary '%s'", rom_binary);
         exit(1);
@@ -700,8 +758,8 @@ static void psion_s5_init(MachineState *machine)
 static void psion_5mx_machine_init(MachineClass *mc)
 {
     mc->desc = "Psion 5mx";
-    mc->init = psion_s5_init;
-    mc->default_cpu_type = ARM_CPU_TYPE_NAME("arm710a");
+    mc->init = psion_5mx_init;
+    mc->default_cpu_type = ARM_CPU_TYPE_NAME("arm710t");
     mc->default_ram_size = 16 * MiB;
 
 }
