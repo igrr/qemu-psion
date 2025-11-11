@@ -40,6 +40,7 @@
 #include "hw/qdev-core.h"
 #include "qemu/log.h"
 #include "hw/display/psion5_fb.h"
+#include "ui/input.h"
 
 
 // #define ENABLE_RTC_DEBUG
@@ -118,8 +119,11 @@ typedef struct WindermereState {
     QEMUTimer wd_timer;
 
     /* syncio */
-    uint16_t syncio_request;
+    uint16_t syncio_request;      /* lastSSIRequest */
     uint16_t syncio_response;
+    int ssi_read_counter;         /* ssiReadCounter */
+    int touch_x;                  /* touchX - digitizer X coordinate */
+    int touch_y;                  /* touchY - digitizer Y coordinate */
 
     /* interrupts */
     qemu_irq irq;
@@ -137,6 +141,10 @@ typedef struct WindermereState {
     /*lcd*/
     uint32_t lcd_bar1;     /* LCD frame buffer base address */
     Psion5FbState fb;
+    
+    /* keyboard */
+    uint8_t keyboard_columns[8];  /* Keyboard matrix: 8 columns, 7 bits each */
+    uint8_t kscan;                /* Keyboard scan register */
 } WindermereState;
 
 #define FIQ_INTERRUPTS (R_INTSR_EXTFIQ_MASK | R_INTSR_BLINT_MASK | R_INTSR_WEINT_MASK)
@@ -198,34 +206,198 @@ static void windermere_rtc_cb(void* opaque)
     windermere_update_irq(s);
 }
 
-static void windermere_handle_syncio_request(WindermereState* s, uint16_t request)
+static void windermere_touch_update(void *opaque, int x, int y, int pressed)
 {
-    uint8_t adc_config = (request) & 0xff;
-    uint8_t bit_length = (request >> 8) & 0x1f;
-    uint8_t smcken = (request >> 13) & 0x1;
-    uint8_t txfrmen = (request >> 14) & 0x1;
+    WindermereState *s = WINDERMERE(opaque);
 
-    SYNCIO_DEBUG("windermere_handle_syncio_request: request=0x%04x adc_config=0x%02x bit_length=%d smcken=%d txfrmen=%d\n",
-            request, adc_config, bit_length, smcken, txfrmen);
-    if (adc_config == 0xa1) {
-        s->syncio_response = 1000;
-    } else if (adc_config == 0x91) {
-        s->syncio_response = 3000;
-    } else if (adc_config == 0xD1) {
-        s->syncio_response = 3000;
-    } else {
-        s->syncio_response = 0x900;
+    s->touch_x = x;
+    s->touch_y = y;
+
+    uint32_t old_intsr = s->intsr;
+
+    s->intsr &= ~R_INTSR_EINT3_MASK;
+    if (pressed)
+        s->intsr |= R_INTSR_EINT3_MASK;
+
+    if (old_intsr != s->intsr) {
+        IRQ_DEBUG("windermere_touch_update: x=%d, y=%d, pressed=%d, intsr=0x%04x\n", x, y, pressed, s->intsr);
+        windermere_update_irq(s);
     }
-    // switch (request) {
-        // 0x00007091
-        // 0x000070a1
-        // 0x000070f1
-        // 0x00006dce
-        // 0x00006d0d
+}
 
-        // 0x00006d08
-        // 0x00002000
-    // }
+static void windermere_set_keyboard_key(WindermereState *s, QKeyCode qcode, int pressed)
+{
+    int column = -1;
+    int bit = -1;
+    
+    /* Map QEMU key codes directly to keyboard matrix column/bit positions */
+    switch (qcode) {
+        /* Column 0 */
+        case Q_KEY_CODE_F2: /* EStdKeyDictaphoneRecord (158) */ column = 0; bit = 6; break;
+        case Q_KEY_CODE_1: column = 0; bit = 5; break;
+        case Q_KEY_CODE_2: column = 0; bit = 4; break;
+        case Q_KEY_CODE_3: column = 0; bit = 3; break;
+        case Q_KEY_CODE_4: column = 0; bit = 2; break;
+        case Q_KEY_CODE_5: column = 0; bit = 1; break;
+        case Q_KEY_CODE_6: column = 0; bit = 0; break;
+        
+        /* Column 1 */
+        case Q_KEY_CODE_F3: /* EStdKeyDictaphonePlay (156) */ column = 1; bit = 6; break;
+        case Q_KEY_CODE_7: column = 1; bit = 5; break;
+        case Q_KEY_CODE_8: column = 1; bit = 4; break;
+        case Q_KEY_CODE_9: column = 1; bit = 3; break;
+        case Q_KEY_CODE_0: column = 1; bit = 2; break;
+        case Q_KEY_CODE_BACKSPACE: /* EStdKeyBackspace (1) */ column = 1; bit = 1; break;
+        case Q_KEY_CODE_APOSTROPHE: /* EStdKeySingleQuote (126) */ column = 1; bit = 0; break;
+        
+        /* Column 2 */
+        case Q_KEY_CODE_ESC: /* EStdKeyEscape (4) */ column = 2; bit = 6; break;
+        case Q_KEY_CODE_Q: column = 2; bit = 5; break;
+        case Q_KEY_CODE_W: column = 2; bit = 4; break;
+        case Q_KEY_CODE_E: column = 2; bit = 3; break;
+        case Q_KEY_CODE_R: column = 2; bit = 2; break;
+        case Q_KEY_CODE_T: column = 2; bit = 1; break;
+        case Q_KEY_CODE_Y: column = 2; bit = 0; break;
+        
+        /* Column 3 */
+        case Q_KEY_CODE_MENU: /* EStdKeyMenu (148) - use MENU key if available, otherwise F3 */
+        case Q_KEY_CODE_F1: /* EStdKeyMenu (148) fallback */ column = 3; bit = 6; break;
+        case Q_KEY_CODE_U: column = 3; bit = 5; break;
+        case Q_KEY_CODE_I: column = 3; bit = 4; break;
+        case Q_KEY_CODE_O: column = 3; bit = 3; break;
+        case Q_KEY_CODE_P: column = 3; bit = 2; break;
+        case Q_KEY_CODE_L: column = 3; bit = 1; break;
+        case Q_KEY_CODE_RET: /* EStdKeyEnter (3) */ column = 3; bit = 0; break;
+        
+        /* Column 4 */
+        case Q_KEY_CODE_CTRL: /* EStdKeyLeftCtrl (22) */ column = 4; bit = 6; break;
+        case Q_KEY_CODE_TAB: /* EStdKeyTab (2) */ column = 4; bit = 5; break;
+        case Q_KEY_CODE_A: column = 4; bit = 4; break;
+        case Q_KEY_CODE_S: column = 4; bit = 3; break;
+        case Q_KEY_CODE_D: column = 4; bit = 2; break;
+        case Q_KEY_CODE_F: column = 4; bit = 1; break;
+        case Q_KEY_CODE_G: column = 4; bit = 0; break;
+        
+        /* Column 5 */
+        case Q_KEY_CODE_ALT_R: /* EStdKeyLeftFunc (24) */ column = 5; bit = 6; break;
+        case Q_KEY_CODE_H: column = 5; bit = 5; break;
+        case Q_KEY_CODE_J: column = 5; bit = 4; break;
+        case Q_KEY_CODE_K: column = 5; bit = 3; break;
+        case Q_KEY_CODE_M: column = 5; bit = 2; break;
+        case Q_KEY_CODE_DOT: /* EStdKeyFullStop (122) */ column = 5; bit = 1; break;
+        case Q_KEY_CODE_DOWN: /* EStdKeyDownArrow (17) */ column = 5; bit = 0; break;
+        
+        /* Column 6 */
+        case Q_KEY_CODE_SHIFT_R: /* EStdKeyRightShift (19) */ column = 6; bit = 6; break;
+        case Q_KEY_CODE_Z: column = 6; bit = 5; break;
+        case Q_KEY_CODE_X: column = 6; bit = 4; break;
+        case Q_KEY_CODE_C: column = 6; bit = 3; break;
+        case Q_KEY_CODE_V: column = 6; bit = 2; break;
+        case Q_KEY_CODE_B: column = 6; bit = 1; break;
+        case Q_KEY_CODE_N: column = 6; bit = 0; break;
+        
+        /* Column 7 */
+        case Q_KEY_CODE_SHIFT: /* EStdKeyLeftShift (18) */ column = 7; bit = 6; break;
+        case Q_KEY_CODE_F4: /* EStdKeyDictaphoneStop (157) */ column = 7; bit = 5; break;
+        case Q_KEY_CODE_SPC: /* EStdKeySpace (5) */ column = 7; bit = 4; break;
+        case Q_KEY_CODE_UP: /* EStdKeyUpArrow (16) */ column = 7; bit = 3; break;
+        case Q_KEY_CODE_COMMA: /* EStdKeyComma (121) */ column = 7; bit = 2; break;
+        case Q_KEY_CODE_LEFT: /* EStdKeyLeftArrow (14) */ column = 7; bit = 1; break;
+        case Q_KEY_CODE_RIGHT: /* EStdKeyRightArrow (15) */ column = 7; bit = 0; break;
+        
+        default:
+            return; /* Key not mapped */
+    }
+    
+    if (column >= 0 && column < 8 && bit >= 0 && bit < 7) {
+        if (pressed) {
+            s->keyboard_columns[column] |= (1 << bit);
+        } else {
+            s->keyboard_columns[column] &= ~(1 << bit);
+        }
+    }
+}
+
+static void windermere_keyboard_update(void *opaque, QKeyCode qcode, int pressed)
+{
+    WindermereState *s = WINDERMERE(opaque);
+    windermere_set_keyboard_key(s, qcode, pressed);
+}
+
+static uint8_t windermere_read_keyboard(WindermereState *s)
+{
+    if (s->kscan & 8) {
+        /* Select one keyboard column */
+        return s->keyboard_columns[s->kscan & 7];
+    } else if (s->kscan == 0) {
+        /* Report all columns combined */
+        uint8_t val = 0;
+        for (int i = 0; i < 8; i++) {
+            val |= s->keyboard_columns[i];
+        }
+        return val;
+    } else {
+        return 0;
+    }
+}
+
+static void windermere_handle_syncio_request(WindermereState* s, uint16_t value)
+{
+    /* On write to SSDR: update lastSSIRequest */
+    if (value != 0) {
+        s->syncio_request = (s->syncio_request >> 8) | (value & 0xFF00);
+    }
+    SYNCIO_DEBUG("windermere_handle_syncio_request: value=0x%04x, lastSSIRequest=0x%04x\n",
+                 value, s->syncio_request);
+}
+
+static uint16_t windermere_get_syncio_response(WindermereState* s)
+{
+    uint16_t ssi_value = 0;
+    uint32_t ret = 0;
+    uint32_t left_bar_width = 48;
+
+    /* Calculate ssiValue based on lastSSIRequest */
+    switch (s->syncio_request) {
+        case 0xD0D3:
+            /* Touch X coordinate */
+            ssi_value = (uint16_t)(50 + ((s->touch_x + left_bar_width) * 5.7));
+            break;
+        case 0x9093:
+            /* Touch Y coordinate */
+            ssi_value = (uint16_t)(3834 - (s->touch_y * 13.225));
+            break;
+        case 0xA4A4:
+            /* Main Battery */
+            ssi_value = 3100;
+            break;
+        case 0xE4E4:
+            /* Backup Battery */
+            ssi_value = 3100;
+            break;
+        default:
+            ssi_value = 0;
+            break;
+    }
+
+    /* Return different bits based on ssiReadCounter */
+    if (s->ssi_read_counter == 4) {
+        ret = (ssi_value >> 5) & 0x7F;
+    }
+    if (s->ssi_read_counter == 5) {
+        ret = (ssi_value << 3) & 0xF8;
+    }
+
+    /* Increment counter and reset when it reaches 6 */
+    s->ssi_read_counter++;
+    if (s->ssi_read_counter == 6) {
+        s->ssi_read_counter = 0;
+    }
+
+    SYNCIO_DEBUG("windermere_get_syncio_response: lastSSIRequest=0x%04x, counter=%d, ssiValue=%d, ret=0x%02x\n",
+                 s->syncio_request, s->ssi_read_counter - 1, ssi_value, (uint8_t)ret);
+
+    return (uint16_t)ret;
 }
 
 static uint64_t windermere_periph_read(void *opaque, hwaddr offset, unsigned size)
@@ -248,7 +420,8 @@ static uint64_t windermere_periph_read(void *opaque, hwaddr offset, unsigned siz
             break;
         }
         case A_PADR: {
-            result = s->port_out[0];
+            /* When used for keyboard, return keyboard data based on kscan */
+            result = windermere_read_keyboard(s);
             break;
         }
         case A_PBDR: {
@@ -322,7 +495,7 @@ static uint64_t windermere_periph_read(void *opaque, hwaddr offset, unsigned siz
             break;
         }
         case A_SSDR: {
-            result = s->syncio_response;
+            result = windermere_get_syncio_response(s);
             break;
         }
         case A_SSSR: {
@@ -338,7 +511,7 @@ static uint64_t windermere_periph_read(void *opaque, hwaddr offset, unsigned siz
             break;
         }
         case A_KSCAN: {
-            result = 0;
+            result = s->kscan;
             break;
         }
         case A_UART1_FLG: {
@@ -492,6 +665,10 @@ static void windermere_periph_write(void *opaque, hwaddr offset,
             break;
         }
         case A_SSCR0: {
+            break;
+        }
+        case A_KSCAN: {
+            s->kscan = value & 0xff;
             break;
         }
         case A_LCD_DBAR1: {
@@ -669,6 +846,12 @@ static void windermere_realize(DeviceState *dev, Error **errp)
 
     qdev_realize(DEVICE(&s->fb), sysbus_get_default(), &error_fatal);
 
+    /* Set up touch callback to update touch coordinates in windermere */
+    psion5fb_set_touch_callback(&s->fb, windermere_touch_update, s);
+    
+    /* Set up keyboard callback to update keyboard state in windermere */
+    psion5fb_set_keyboard_callback(&s->fb, windermere_keyboard_update, s);
+
     // vcd_open(&vcd_file_info);
 }
 
@@ -682,6 +865,19 @@ static void windermere_reset(DeviceState *dev)
 
     // set up the 64Hz RTC timer
     timer_mod_anticipate_ns(&s->rtc_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000 * 1000 * 1000 / 64);
+
+    /* Initialize syncio state */
+    s->syncio_request = 0;
+    s->syncio_response = 0;
+    s->ssi_read_counter = 0;
+    s->touch_x = 0;
+    s->touch_y = 0;
+    
+    /* Initialize keyboard state */
+    s->kscan = 0;
+    for (int i = 0; i < 8; i++) {
+        s->keyboard_columns[i] = 0;
+    }
 }
 
 static void windermere_class_init(ObjectClass *klass, void *data)

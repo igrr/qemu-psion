@@ -4,6 +4,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "ui/console.h"
+#include "ui/input.h"
 #include "framebuffer.h"
 #include "ui/pixel_ops.h"
 #include "qom/object.h"
@@ -96,6 +97,101 @@ static void psion5fb_invalidate(void *opaque)
     s->invalidate = 1;
 }
 
+static void psion5fb_input_event(DeviceState *dev, QemuConsole *src,
+                                 InputEvent *evt)
+{
+    Psion5FbState *s = PSION5FB(dev);
+    InputBtnEvent *btn;
+    InputMoveEvent *move;
+    int x, y;
+
+    switch (evt->type) {
+    case INPUT_EVENT_KIND_BTN:
+        btn = evt->u.btn.data;
+        if (btn->button == INPUT_BUTTON_LEFT) {
+            s->touch_pressed = btn->down ? 1 : 0;
+            if (s->touch_update_cb) {
+                s->touch_update_cb(s->touch_opaque, s->touch_x, s->touch_y, s->touch_pressed);
+            }
+        }
+        break;
+
+    case INPUT_EVENT_KIND_ABS:
+        move = evt->u.abs.data;
+        switch (move->axis) {
+        case INPUT_AXIS_X:
+            /* Scale from 0-0x7FFF to 0-cols */
+            x = (move->value * s->cols) / 0x7FFF;
+            if (x < 0) x = 0;
+            if (x >= (int)s->cols) x = s->cols - 1;
+            s->touch_x = x;
+            break;
+        case INPUT_AXIS_Y:
+            /* Scale from 0-0x7FFF to 0-rows */
+            y = (move->value * s->rows) / 0x7FFF;
+            if (y < 0) y = 0;
+            if (y >= (int)s->rows) y = s->rows - 1;
+            s->touch_y = y;
+            break;
+        default:
+            break;
+        }
+        if (s->touch_update_cb) {
+            s->touch_update_cb(s->touch_opaque, s->touch_x, s->touch_y, s->touch_pressed);
+        }
+        break;
+
+    case INPUT_EVENT_KIND_REL:
+        /* Relative movement - update position */
+        move = evt->u.rel.data;
+        switch (move->axis) {
+        case INPUT_AXIS_X:
+            s->touch_x += move->value;
+            if (s->touch_x < 0) s->touch_x = 0;
+            if (s->touch_x >= (int)s->cols) s->touch_x = s->cols - 1;
+            break;
+        case INPUT_AXIS_Y:
+            s->touch_y += move->value;
+            if (s->touch_y < 0) s->touch_y = 0;
+            if (s->touch_y >= (int)s->rows) s->touch_y = s->rows - 1;
+            break;
+        default:
+            break;
+        }
+        if (s->touch_update_cb) {
+            s->touch_update_cb(s->touch_opaque, s->touch_x, s->touch_y, s->touch_pressed);
+        }
+        break;
+
+    case INPUT_EVENT_KIND_KEY: {
+        InputKeyEvent *key = evt->u.key.data;
+        
+        /* Pass QEMU key codes directly to the callback for mapping in psion_5mx.c */
+        if (key->key->type == KEY_VALUE_KIND_QCODE && s->keyboard_update_cb) {
+            QKeyCode qcode = key->key->u.qcode.data;
+            s->keyboard_update_cb(s->keyboard_opaque, qcode, key->down);
+        }
+        break;
+    }
+
+    default:
+        break;
+    }
+}
+
+static void psion5fb_input_sync(DeviceState *dev)
+{
+    /* Sync is called after a batch of input events */
+    /* For now, we don't need to do anything special */
+}
+
+static const QemuInputHandler psion5fb_input_handler = {
+    .name  = "Psion5mx Touch/Keyboard",
+    .mask  = INPUT_EVENT_MASK_BTN | INPUT_EVENT_MASK_ABS | INPUT_EVENT_MASK_REL | INPUT_EVENT_MASK_KEY,
+    .event = psion5fb_input_event,
+    .sync  = psion5fb_input_sync,
+};
+
 static const GraphicHwOps psion5fb_ops = {
     .invalidate  = psion5fb_invalidate,
     .gfx_update  = psion5fb_update,
@@ -118,8 +214,20 @@ static void psion5fb_realize(DeviceState *dev, Error **errp)
         s->rgb_values[15 - i] = r | (g << 8) | (b << 16) | 0xFF000000;
     }
 
+    /* Initialize input state */
+    s->touch_x = 0;
+    s->touch_y = 0;
+    s->touch_pressed = 0;
+    s->touch_update_cb = NULL;
+    s->touch_opaque = NULL;
+    s->keyboard_update_cb = NULL;
+    s->keyboard_opaque = NULL;
+
     s->con = graphic_console_init(dev, 0, &psion5fb_ops, s);
     qemu_console_resize(s->con, s->cols, s->rows);
+
+    /* Register input handler - binding is optional and not needed here */
+    s->input_handler = qemu_input_handler_register(dev, &psion5fb_input_handler);
 }
 
 void psion5fb_set_base_addr(Psion5FbState *s, hwaddr base_addr)
@@ -130,6 +238,18 @@ void psion5fb_set_base_addr(Psion5FbState *s, hwaddr base_addr)
     if (s->con) {
         dpy_gfx_update_full(s->con);
     }
+}
+
+void psion5fb_set_touch_callback(Psion5FbState *s, void (*cb)(void *opaque, int x, int y, int pressed), void *opaque)
+{
+    s->touch_update_cb = cb;
+    s->touch_opaque = opaque;
+}
+
+void psion5fb_set_keyboard_callback(Psion5FbState *s, void (*cb)(void *opaque, QKeyCode qcode, int pressed), void *opaque)
+{
+    s->keyboard_update_cb = cb;
+    s->keyboard_opaque = opaque;
 }
 
 
@@ -163,3 +283,4 @@ static void psion5fb_register_types(void)
 }
 
 type_init(psion5fb_register_types)
+
